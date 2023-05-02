@@ -1,10 +1,12 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from gensim.models import KeyedVectors
 import os
 import pickle
+from sklearn.metrics import f1_score
 
 class Config(object):
     def __init__(self, embedding):
@@ -19,7 +21,7 @@ class Config(object):
         self.vocab_size = embedding.shape[0]
         self.embedding_dim = embedding.shape[1]
         self.feature_size = 20
-        self.window_sizes = [2, 3, 4]
+        self.window_sizes = [3, 5, 7]
         self.max_sent_len = 120
 
 class SemtimentDataset(Dataset):
@@ -52,11 +54,10 @@ class TextCNN(nn.Module):
     def __init__(self, config):
         super(TextCNN, self).__init__()
         self.config = config
+        self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
+                                      embedding_dim=config.embedding_dim)
         if config.pretrained_embed:
-            self.embedding = nn.Embedding.from_pretrained(config.embedding)
-        else:
-            self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
-                                        embedding_dim=config.embedding_dim)
+            self.embedding.weight.data.copy_(config.embedding)
         self.convs = nn.ModuleList([
             nn.Sequential(nn.Conv1d(in_channels=config.embedding_dim,
                                      out_channels=config.feature_size,
@@ -70,48 +71,11 @@ class TextCNN(nn.Module):
                             out_features=config.num_class)
     
     def forward(self, x):
-        embed_x = self.embedding(x) # (batch_size, len(sent), embedding_dim)
-        embed_x = embed_x.permute(0, 2, 1) # (batch_size, embedding_dim, len(sent))
-        y = [conv(embed_x) for conv in self.convs] # (batch_size, feature_size, 1)
-        y = torch.cat(y, dim=1) # (batch_size, feature_size_sum, 1)
-        y = y.view(y.size(0), y.size(1)) # (batch_size, feature_size_sum)
-        y = self.dropout(y)
-        y = self.fc(y) # (batch_size, num_class)
-        return y
-    
-# class TextCNN(nn.Module):
-#     def __init__(self, config):
-#         super(TextCNN, self).__init__()
-#         self.config = config
-        
-#         self.embedding = nn.Embedding(config.vocab_size, config.embedding_dim)
-#         #! embedding is a table, which is used to lookup the embedding vector of a word
-#         self.embedding.weight.requires_grad = True
-#         #! if update_w2v is True, the embedding.weight will be updated during training
-#         self.embedding.weight.data.copy_(config.embedding)
-#         #! import the pretrained embedding vector as embedding.weight
-#         self.conv1 = nn.Conv2d(1, 20, (3, config.embedding_dim))
-#         #! conv1 is a convolutional layer, which takes input layer 1 ( we often take picture for 3 layer, but here is the sentence, we take 1 layer)
-#         #! kernel_num is the number of filter, which is the number of output channel, here we have 20 filter
-#         #! every filter bite a matrix of size (3, 50)
-#         self.conv2 = nn.Conv2d(1, 20, (5, config.embedding_dim))
-#         self.conv3 = nn.Conv2d(1, 20, (7, config.embedding_dim))
-#         # Dropout
-#         self.dropout = nn.Dropout(0.3)
-#         # 全连接层
-#         self.fc = nn.Linear(60, 2)
-    
-#     @staticmethod
-#     def conv_and_pool(x, conv):
-#         x = nn.functional.relu(conv(x).squeeze(3))
-#         return nn.functional.max_pool1d(x, x.size(2)).squeeze(2)
-
-#     def forward(self, x):
-#         x = self.embedding(x).unsqueeze(1)
-#         x1 = self.conv_and_pool(x, self.conv1)
-#         x2 = self.conv_and_pool(x, self.conv2)
-#         x3 = self.conv_and_pool(x, self.conv3)
-#         return self.fc(self.dropout(torch.cat((x1, x2, x3), 1)))
+        embed_x = self.embedding(x) # (batch_size, max_len_sent, embedding_dim)
+        embed_x = embed_x.permute(0, 2, 1) # (batch_size, embedding_dim, max_sent_len)
+        y = [conv(embed_x).squeeze(2) for conv in self.convs] # [(batch_size, feature_size)]
+        y = torch.cat(y, dim=1) # (batch_size, feature_size_sum)
+        return self.fc(self.dropout(y))
 
 def get_word2id(wordid_path, data_paths = []):
     print("load word2id...")
@@ -164,36 +128,59 @@ def train_loop(dataloader, model, loss_fn, optimizer):
 
 def test_loop(dataloader, model, loss_fn):
     model.eval()
-    size = len(dataloader.dataset)
-    num_batches = len(dataloader)
-    test_loss = 0.
-    FP, TP, FN, TN, P, N = 0, 0, 0, 0, 0, 0
-    with torch.no_grad():
-        for X, y in dataloader:
-            X, y = X.to(device), y.to(device)
-            pred = model(X)
-            test_loss += loss_fn(pred, y).item()
-            tf = pred.argmax(1) == y
-            for i in range(tf.size(0)):
-                if y[i] == 0:
-                    P = P + 1
-                    if tf[i]: TP = TP + 1
-                    else: FN = FN + 1
-                else:
-                    N = N + 1
-                    if tf[i]: TN = TN + 1
-                    else: FP = FP + 1
-    test_loss /= num_batches
-    try:
-        precision = TP / (TP+FP)
-        recall = TP / P
-        accuracy = (TP+TN) / (P+N)
-        F_measure = 2 / (1/precision + 1/recall)
-        print(f"Test Error: \n\
-  Precision: {precision:>6f}, Recall: {recall:>6f} \n\
-  Accuracy: {accuracy:>6f}, F_measure: {F_measure:>6f}")
-    except ZeroDivisionError:
-        print("Divide zero in F-mesure calculation")
+    # 验证过程
+    val_loss, val_acc = 0.0, 0.0
+    count, correct = 0, 0
+    full_true = []
+    full_pred = []
+    for _, (x, y) in enumerate(dataloader):
+        x, y = x.to(device), y.to(device)
+        output = model(x)
+        loss = loss_fn(output, y)
+        val_loss += loss.item()
+        correct += (output.argmax(1) == y).float().sum().item()
+        count += len(x)
+        full_true.extend(y.cpu().numpy().tolist())
+        full_pred.extend(output.argmax(1).cpu().numpy().tolist())
+    val_loss *= config.batch_size
+    val_loss /= len(dataloader.dataset)
+    val_acc = correct / count
+    f1 = f1_score(np.array(full_true), np.array(full_pred), average="binary")
+    print(f"val_loss: {val_loss:>4f}, val_acc: {val_acc:>4f}, f1: {f1:>4f}")
+    return val_loss, val_acc, f1
+
+# def test_loop(dataloader, model, loss_fn):
+#     model.eval()
+#     size = len(dataloader.dataset)
+#     num_batches = len(dataloader)
+#     test_loss = 0.
+#     FP, TP, FN, TN, P, N = 0, 0, 0, 0, 0, 0
+#     with torch.no_grad():
+#         for X, y in dataloader:
+#             X, y = X.to(device), y.to(device)
+#             pred = model(X)
+#             test_loss += loss_fn(pred, y).item()
+#             tf = pred.argmax(1) == y
+#             for i in range(tf.size(0)):
+#                 if y[i] == 0:
+#                     P = P + 1
+#                     if tf[i]: TP = TP + 1
+#                     else: FN = FN + 1
+#                 else:
+#                     N = N + 1
+#                     if tf[i]: TN = TN + 1
+#                     else: FP = FP + 1
+#     test_loss /= num_batches
+#     try:
+#         precision = TP / (TP+FP)
+#         recall = TP / P
+#         accuracy = (TP+TN) / (P+N)
+#         F_measure = 2 / (1/precision + 1/recall)
+#         print(f"Test Error: \n\
+#   Precision: {precision:>6f}, Recall: {recall:>6f} \n\
+#   Accuracy: {accuracy:>6f}, F_measure: {F_measure:>6f}")
+#     except ZeroDivisionError:
+#         print("Divide zero in F-mesure calculation")
 
 if __name__ == "__main__":
     file_path = os.path.abspath(os.path.realpath(__file__))
