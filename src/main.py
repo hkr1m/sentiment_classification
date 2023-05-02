@@ -10,7 +10,7 @@ class Config(object):
     def __init__(self, embedding):
         self.load_model = False
         self.learning_rate = 1e-3
-        self.batch_size = 64
+        self.batch_size = 50
         self.epochs = 100
         self.dropout_rate = 0.3
         self.num_class = 2
@@ -19,8 +19,8 @@ class Config(object):
         self.vocab_size = embedding.shape[0]
         self.embedding_dim = embedding.shape[1]
         self.feature_size = 20
-        self.window_sizes = [3, 5, 7]
-        self.max_sent_len = 50
+        self.window_sizes = [2, 3, 4]
+        self.max_sent_len = 120
 
 class SemtimentDataset(Dataset):
     def __init__(self, data_path, word2id, max_sent_len):
@@ -65,6 +65,7 @@ class TextCNN(nn.Module):
                            nn.MaxPool1d(kernel_size=config.max_sent_len-ker+1))
             for ker in config.window_sizes
         ])
+        self.dropout = nn.Dropout(config.dropout_rate)
         self.fc = nn.Linear(in_features=config.feature_size*len(config.window_sizes),
                             out_features=config.num_class)
     
@@ -74,7 +75,7 @@ class TextCNN(nn.Module):
         y = [conv(embed_x) for conv in self.convs] # (batch_size, feature_size, 1)
         y = torch.cat(y, dim=1) # (batch_size, feature_size_sum, 1)
         y = y.view(y.size(0), y.size(1)) # (batch_size, feature_size_sum)
-        y = nn.functional.dropout(y, p=self.config.dropout_rate)
+        y = self.dropout(y)
         y = self.fc(y) # (batch_size, num_class)
         return y
     
@@ -147,19 +148,22 @@ def get_embedding(embedding_path, word2vec_path = "", word2id = {}):
     return torch.Tensor(embedding)
 
 def train_loop(dataloader, model, loss_fn, optimizer):
+    model.train()
     size = len(dataloader.dataset)
     for batch, (X, y) in enumerate(dataloader):
         X, y = X.to(device), y.to(device)
+        optimizer.zero_grad()
         pred = model(X)
         loss = loss_fn(pred, y)
-        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+    scheduler.step()
 
 def test_loop(dataloader, model, loss_fn):
+    model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     test_loss = 0.
@@ -227,7 +231,8 @@ if __name__ == "__main__":
     if config.load_model:
         model.load_state_dict(torch.load(model_path))
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5)
 
     for t in range(config.epochs):
         print(f"Epoch {t+1}\n-------------------------------")
