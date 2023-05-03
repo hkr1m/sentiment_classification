@@ -73,68 +73,119 @@ class TextCNN(nn.Module):
                             out_features=config.num_class)
     
     def forward(self, x):
-        embed_x = self.embedding(x) # (batch_size, max_len_sent, embedding_dim)
-        embed_x = embed_x.permute(0, 2, 1) # (batch_size, embedding_dim, max_sent_len)
-        y = [conv(embed_x).squeeze(2) for conv in self.convs] # [(batch_size, feature_size)]
-        y = torch.cat(y, dim=1) # (batch_size, feature_size_sum)
+        embed_x = self.embedding(x) # (batch, len, embed)
+        embed_x = embed_x.permute(0, 2, 1) # (batch, embed, len)
+        y = [conv(embed_x).squeeze(2) for conv in self.convs] # [(batch, feature_size)]
+        y = torch.cat(y, dim=1) # (batch, feature_size_sum)
         return self.fc(self.dropout(y))
 
-# class RNN(nn.Module):
-#     def __init__(self, config):
-#         super(RNN, self).__init__()
-#         self.config = config
-#         self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
-#                                       embedding_dim=config.embedding_dim)
-#         if config.pretrained_embed:
-#             self.embedding.weight.data.copy_(config.embedding)
-#         self.i2h = nn.Linear(in_features=config.embedding_dim,
-#                              out_features=config.hidden_dim)
-#         self.h2h = nn.Linear(in_features=config.hidden_dim,
-#                              out_features=config.hidden_dim)
-#         self.h2o = nn.Linear(in_features=config.hidden_dim,
-#                              out_features=64)
-#         self.fc = nn.Linear(64, 2)
+class _RNNCell(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(_RNNCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.i2h = nn.Linear(input_size, hidden_size)
+        self.h2h = nn.Linear(hidden_size, hidden_size)
+    
+    def forward(self, input, hidden):
+        hidden = self.i2h(input) + self.h2h(hidden)
+        return torch.tanh(hidden)
 
-#     def step(self, input, hidden):
-#         hidden = torch.tanh(self.i2h(input) + self.h2h(hidden))
-#         return hidden
-    
-#     def forward(self, x):
-#         embed_x = self.embedding(x).permute(1, 0, 2) # (len, batch, embed)
-#         hidden = torch.zeros(x.size(0), self.config.hidden_dim).to(device)
-#         for word in embed_x:
-#             hidden = self.step(word, hidden)
-#         return self.fc(self.h2o(hidden))
-    
-class RNN(nn.Module):
-    def __init__(self, config, rnn_model):
-        super(RNN, self).__init__()
+class BiRNN(nn.Module):
+    def __init__(self, config):
+        super(BiRNN, self).__init__()
+        self.num_layers = config.num_layers
+        self.hidden_dim = config.hidden_dim
         self.config = config
         self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
                                       embedding_dim=config.embedding_dim)
-        self.rnn = rnn_model
         if config.pretrained_embed:
             self.embedding.weight.data.copy_(config.embedding)
-        self.decoder = nn.Linear(2 * config.hidden_dim, 64)
-        self.fc1 = nn.Linear(64, config.num_class)
+        self.fwd_rnn = nn.ModuleList([_RNNCell(input_size=config.embedding_dim,
+                                                   hidden_size=config.hidden_dim)])
+        self.bwd_rnn = nn.ModuleList([_RNNCell(input_size=config.embedding_dim,
+                                                    hidden_size=config.hidden_dim)])
+        for _ in range(config.num_layers-1):
+            self.fwd_rnn.append(_RNNCell(input_size=config.hidden_dim,
+                                             hidden_size=config.hidden_dim))
+            self.bwd_rnn.append(_RNNCell(input_size=config.hidden_dim,
+                                              hidden_size=config.hidden_dim))
+        
+        self.dropout = nn.Dropout(config.dropout_rate)
+        self.fc = nn.Sequential(nn.Linear(config.hidden_dim * 2, 64),
+                                nn.Linear(64, config.num_class))
 
     def forward(self, x):
-        embed_x = self.embedding(x) # (batch, len, embed)
-        output, (hidden, cell) = self.rnn(embed_x) # (num_layers * directions, batch, embed)
-        hidden = hidden.view(self.config.num_layers, -1, x.size(0), self.config.hidden_dim)
-        hidden = torch.cat(hidden[-1].unbind(0), dim=-1)
-        return self.fc1(self.decoder(hidden))
-
-class RNN_LSTM(RNN):
+        batch_size, seq_len = x.size()
+        embed_x = self.embedding(x).permute(1, 0, 2) # (len, batch, embed)
+        h_fwd = [torch.zeros(batch_size, self.hidden_dim).to(x.device) for _ in range(self.num_layers)]
+        h_bwd = [torch.zeros(batch_size, self.hidden_dim).to(x.device) for _ in range(self.num_layers)]
+        for t in range(seq_len):
+            t_fwd, t_bwd = [], []
+            for layer in range(self.num_layers):
+                if layer == 0:
+                    t_fwd.append(self.fwd_rnn[layer](embed_x[t], h_fwd[layer]))
+                    t_bwd.append(self.bwd_rnn[layer](embed_x[-t-1], h_bwd[layer]))
+                else:
+                    t_fwd.append(self.fwd_rnn[layer](t_fwd[layer-1], h_fwd[layer]))
+                    t_bwd.append(self.bwd_rnn[layer](t_bwd[layer-1], h_bwd[layer]))
+                h_fwd[layer] = self.dropout(t_fwd[layer])
+                h_bwd[layer] = self.dropout(t_bwd[layer])
+                
+        hidden = torch.cat((h_fwd[-1], h_bwd[-1]), dim=1)
+        return self.fc(hidden)
+    
+class RNN_LSTM(nn.Module):
     def __init__(self, config):
-        super(RNN_LSTM, self).__init__(config, rnn_model=nn.LSTM(
+        super(RNN_LSTM, self).__init__()
+        self.config = config
+        self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
+                                      embedding_dim=config.embedding_dim)
+        self.lstm = nn.LSTM(
             input_size=config.embedding_dim,
             hidden_size=config.hidden_dim,
             num_layers=config.num_layers,
             dropout=config.dropout_rate,
             bidirectional=True,
             batch_first=True
-        ))
+        )
+        if config.pretrained_embed:
+            self.embedding.weight.data.copy_(config.embedding)
+        self.fc = nn.Sequential(nn.Linear(config.hidden_dim * 2, 64),
+                                nn.Linear(64, config.num_class))
+
+    def forward(self, x):
+        embed_x = self.embedding(x) # (batch, len, embed)
+        _, (hidden, _) = self.lstm(embed_x) # (num_layers * directions, batch, embed)
+        hidden = hidden.view(self.config.num_layers, -1, x.size(0), self.config.hidden_dim)
+        hidden = torch.cat(hidden[-1].unbind(0), dim=-1)
+        return self.fc(hidden)
+
+class RNN_GRU(nn.Module):
+    def __init__(self, config):
+        super(RNN_GRU, self).__init__()
+        self.config = config
+        self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
+                                      embedding_dim=config.embedding_dim)
+        self.gru = nn.GRU(
+            input_size=config.embedding_dim,
+            hidden_size=config.hidden_dim,
+            num_layers=config.num_layers,
+            dropout=config.dropout_rate,
+            bidirectional=True,
+            batch_first=True
+        )
+        if config.pretrained_embed:
+            self.embedding.weight.data.copy_(config.embedding)
+        self.fc = nn.Sequential(nn.Linear(config.hidden_dim * 2, 64),
+                                nn.Linear(64, config.num_class))
+
+    def forward(self, x):
+        embed_x = self.embedding(x) # (batch, len, embed)
+        _, hidden = self.gru(embed_x) # (num_layers * directions, batch, embed)
+        hidden = hidden.view(self.config.num_layers, -1, x.size(0), self.config.hidden_dim)
+        hidden = torch.cat(hidden[-1].unbind(0), dim=-1)
+        return self.fc(hidden)
 
 def get_word2id(wordid_path, data_paths = []):
     print("load word2id...")
@@ -267,13 +318,13 @@ if __name__ == "__main__":
     device = (
         "cuda"
         if torch.cuda.is_available()
-        #else "mps"
-        #if torch.backends.mps.is_available()
+        else "mps"
+        if torch.backends.mps.is_available()
         else "cpu"
     )
     print(f"Using {device} device")
 
-    model = RNN_LSTM(config).to(device)
+    model = RNN_GRU(config).to(device)
     if config.load_model:
         model.load_state_dict(torch.load(model_path))
     loss_fn = nn.CrossEntropyLoss()
