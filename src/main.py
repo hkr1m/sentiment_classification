@@ -9,7 +9,7 @@ import pickle
 from sklearn.metrics import f1_score
 
 class Config(object):
-    def __init__(self, embedding):
+    def __init__(self, word2vec):
         self.load_model = False
         self.learning_rate = 1e-3
         self.batch_size = 50
@@ -17,12 +17,14 @@ class Config(object):
         self.dropout_rate = 0.3
         self.num_class = 2
         self.pretrained_embed = True
-        self.embedding = embedding
+        self.embedding = word2vec
         self.vocab_size = embedding.shape[0]
         self.embedding_dim = embedding.shape[1]
         self.feature_size = 20
         self.window_sizes = [3, 5, 7]
         self.max_sent_len = 120
+        self.num_layers = 2
+        self.hidden_dim = 100
 
 class SemtimentDataset(Dataset):
     def __init__(self, data_path, word2id, max_sent_len):
@@ -77,6 +79,63 @@ class TextCNN(nn.Module):
         y = torch.cat(y, dim=1) # (batch_size, feature_size_sum)
         return self.fc(self.dropout(y))
 
+# class RNN(nn.Module):
+#     def __init__(self, config):
+#         super(RNN, self).__init__()
+#         self.config = config
+#         self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
+#                                       embedding_dim=config.embedding_dim)
+#         if config.pretrained_embed:
+#             self.embedding.weight.data.copy_(config.embedding)
+#         self.i2h = nn.Linear(in_features=config.embedding_dim,
+#                              out_features=config.hidden_dim)
+#         self.h2h = nn.Linear(in_features=config.hidden_dim,
+#                              out_features=config.hidden_dim)
+#         self.h2o = nn.Linear(in_features=config.hidden_dim,
+#                              out_features=64)
+#         self.fc = nn.Linear(64, 2)
+
+#     def step(self, input, hidden):
+#         hidden = torch.tanh(self.i2h(input) + self.h2h(hidden))
+#         return hidden
+    
+#     def forward(self, x):
+#         embed_x = self.embedding(x).permute(1, 0, 2) # (len, batch, embed)
+#         hidden = torch.zeros(x.size(0), self.config.hidden_dim).to(device)
+#         for word in embed_x:
+#             hidden = self.step(word, hidden)
+#         return self.fc(self.h2o(hidden))
+    
+class RNN(nn.Module):
+    def __init__(self, config, rnn_model):
+        super(RNN, self).__init__()
+        self.config = config
+        self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
+                                      embedding_dim=config.embedding_dim)
+        self.rnn = rnn_model
+        if config.pretrained_embed:
+            self.embedding.weight.data.copy_(config.embedding)
+        self.decoder = nn.Linear(2 * config.hidden_dim, 64)
+        self.fc1 = nn.Linear(64, config.num_class)
+
+    def forward(self, x):
+        embed_x = self.embedding(x) # (batch, len, embed)
+        output, (hidden, cell) = self.rnn(embed_x) # (num_layers * directions, batch, embed)
+        hidden = hidden.view(self.config.num_layers, -1, x.size(0), self.config.hidden_dim)
+        hidden = torch.cat(hidden[-1].unbind(0), dim=-1)
+        return self.fc1(self.decoder(hidden))
+
+class RNN_LSTM(RNN):
+    def __init__(self, config):
+        super(RNN_LSTM, self).__init__(config, rnn_model=nn.LSTM(
+            input_size=config.embedding_dim,
+            hidden_size=config.hidden_dim,
+            num_layers=config.num_layers,
+            dropout=config.dropout_rate,
+            bidirectional=True,
+            batch_first=True
+        ))
+
 def get_word2id(wordid_path, data_paths = []):
     print("load word2id...")
     word2id = {"_NULL_": 0}
@@ -126,61 +185,61 @@ def train_loop(dataloader, model, loss_fn, optimizer):
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
     scheduler.step()
 
-def test_loop(dataloader, model, loss_fn):
-    model.eval()
-    # 验证过程
-    val_loss, val_acc = 0.0, 0.0
-    count, correct = 0, 0
-    full_true = []
-    full_pred = []
-    for _, (x, y) in enumerate(dataloader):
-        x, y = x.to(device), y.to(device)
-        output = model(x)
-        loss = loss_fn(output, y)
-        val_loss += loss.item()
-        correct += (output.argmax(1) == y).float().sum().item()
-        count += len(x)
-        full_true.extend(y.cpu().numpy().tolist())
-        full_pred.extend(output.argmax(1).cpu().numpy().tolist())
-    val_loss *= config.batch_size
-    val_loss /= len(dataloader.dataset)
-    val_acc = correct / count
-    f1 = f1_score(np.array(full_true), np.array(full_pred), average="binary")
-    print(f"val_loss: {val_loss:>4f}, val_acc: {val_acc:>4f}, f1: {f1:>4f}")
-    return val_loss, val_acc, f1
-
 # def test_loop(dataloader, model, loss_fn):
 #     model.eval()
-#     size = len(dataloader.dataset)
-#     num_batches = len(dataloader)
-#     test_loss = 0.
-#     FP, TP, FN, TN, P, N = 0, 0, 0, 0, 0, 0
-#     with torch.no_grad():
-#         for X, y in dataloader:
-#             X, y = X.to(device), y.to(device)
-#             pred = model(X)
-#             test_loss += loss_fn(pred, y).item()
-#             tf = pred.argmax(1) == y
-#             for i in range(tf.size(0)):
-#                 if y[i] == 0:
-#                     P = P + 1
-#                     if tf[i]: TP = TP + 1
-#                     else: FN = FN + 1
-#                 else:
-#                     N = N + 1
-#                     if tf[i]: TN = TN + 1
-#                     else: FP = FP + 1
-#     test_loss /= num_batches
-#     try:
-#         precision = TP / (TP+FP)
-#         recall = TP / P
-#         accuracy = (TP+TN) / (P+N)
-#         F_measure = 2 / (1/precision + 1/recall)
-#         print(f"Test Error: \n\
-#   Precision: {precision:>6f}, Recall: {recall:>6f} \n\
-#   Accuracy: {accuracy:>6f}, F_measure: {F_measure:>6f}")
-#     except ZeroDivisionError:
-#         print("Divide zero in F-mesure calculation")
+#     # 验证过程
+#     val_loss, val_acc = 0.0, 0.0
+#     count, correct = 0, 0
+#     full_true = []
+#     full_pred = []
+#     for _, (x, y) in enumerate(dataloader):
+#         x, y = x.to(device), y.to(device)
+#         output = model(x)
+#         loss = loss_fn(output, y)
+#         val_loss += loss.item()
+#         correct += (output.argmax(1) == y).float().sum().item()
+#         count += len(x)
+#         full_true.extend(y.cpu().numpy().tolist())
+#         full_pred.extend(output.argmax(1).cpu().numpy().tolist())
+#     val_loss *= config.batch_size
+#     val_loss /= len(dataloader.dataset)
+#     val_acc = correct / count
+#     f1 = f1_score(np.array(full_true), np.array(full_pred), average="binary")
+#     print(f"val_loss: {val_loss:>4f}, val_acc: {val_acc:>4f}, f1: {f1:>4f}")
+#     return val_loss, val_acc, f1
+
+def test_loop(dataloader, model, loss_fn):
+    model.eval()
+    size = len(dataloader.dataset)
+    num_batches = len(dataloader)
+    test_loss = 0.
+    FP, TP, FN, TN, P, N = 0, 0, 0, 0, 0, 0
+    with torch.no_grad():
+        for X, y in dataloader:
+            X, y = X.to(device), y.to(device)
+            pred = model(X)
+            test_loss += loss_fn(pred, y).item()
+            tf = pred.argmax(1) == y
+            for i in range(tf.size(0)):
+                if y[i] == 0:
+                    P = P + 1
+                    if tf[i]: TP = TP + 1
+                    else: FN = FN + 1
+                else:
+                    N = N + 1
+                    if tf[i]: TN = TN + 1
+                    else: FP = FP + 1
+    test_loss /= num_batches
+    try:
+        precision = TP / (TP+FP)
+        recall = TP / P
+        accuracy = (TP+TN) / (P+N)
+        F_measure = 2 / (1/precision + 1/recall)
+        print(f"Test Error: \n\
+  Precision: {precision:>6f}, Recall: {recall:>6f} \n\
+  Accuracy: {accuracy:>6f}, F_measure: {F_measure:>6f}")
+    except ZeroDivisionError:
+        print("Divide zero in F-mesure calculation")
 
 if __name__ == "__main__":
     file_path = os.path.abspath(os.path.realpath(__file__))
@@ -208,13 +267,13 @@ if __name__ == "__main__":
     device = (
         "cuda"
         if torch.cuda.is_available()
-        else "mps"
-        if torch.backends.mps.is_available()
+        #else "mps"
+        #if torch.backends.mps.is_available()
         else "cpu"
     )
     print(f"Using {device} device")
 
-    model = TextCNN(config).to(device)
+    model = RNN_LSTM(config).to(device)
     if config.load_model:
         model.load_state_dict(torch.load(model_path))
     loss_fn = nn.CrossEntropyLoss()
