@@ -29,7 +29,7 @@ class Config(object):
 class Parser(argparse.ArgumentParser):
     def __init__(self):
         super(Parser, self).__init__(description="Sentiment Classification")
-        self.add_argument("-m", "--model", choices=["TextCNN", "BiRNN", "LSTM", "GRU"], default="TextCNN")
+        self.add_argument("-m", "--model", choices=["TextCNN", "BiRNN", "LSTM", "GRU", "MLP"], default="TextCNN")
         self.add_argument("-l", "--model-load-path", dest="model_load_path", default="")
         self.add_argument("-s", "--model-save-path", dest="model_save_path", default="")
         self.add_argument("--device", choices=["cuda", "mps", "cpu", "auto"], default="auto")
@@ -43,6 +43,7 @@ class Parser(argparse.ArgumentParser):
         self.add_argument("-w", "--window-sizes", dest="window_sizes", type=int, nargs="*", default=[3, 5, 7])
         self.add_argument("-n", "--num-layers", dest="num_layers", type=int, default=2)
         self.add_argument("-hd", "--hidden-dim", dest="hidden_dim", type=int, default=100)
+        self.add_argument("-hs", "--hidden-sizes", dest="hidden_sizes", type=int, nargs="*", default=[512, 512])
 
 if __name__ == "__main__":
     train_path = "data/train.txt"
@@ -73,6 +74,8 @@ if __name__ == "__main__":
         model = models.LSTM(config).to(config.device)
     elif config.model == "GRU":
         model = models.GRU(config).to(config.device)
+    elif config.model == "MLP":
+        model = models.MLP(config).to(config.device)
 
     if len(config.model_load_path):
         print(f"Loading weights from {config.model_load_path}")

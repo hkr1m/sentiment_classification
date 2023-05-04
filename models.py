@@ -59,7 +59,7 @@ class BiRNN(nn.Module):
             self.bwd_rnn.append(_RNNCell(input_size=config.hidden_dim,
                                               hidden_size=config.hidden_dim))
         
-        self.dropout = nn.Dropout(config.dropout_rate)
+        self.dropout = nn.ModuleList([nn.Dropout(config.dropout_rate) for _ in range(config.num_layers)])
         self.fc = nn.Sequential(nn.Linear(config.hidden_dim * 2, 64),
                                 nn.Linear(64, config.num_class))
 
@@ -77,8 +77,8 @@ class BiRNN(nn.Module):
                 else:
                     t_fwd.append(self.fwd_rnn[layer](t_fwd[layer-1], h_fwd[layer]))
                     t_bwd.append(self.bwd_rnn[layer](t_bwd[layer-1], h_bwd[layer]))
-                h_fwd[layer] = self.dropout(t_fwd[layer])
-                h_bwd[layer] = self.dropout(t_bwd[layer])
+                h_fwd[layer] = self.dropout[layer](t_fwd[layer])
+                h_bwd[layer] = self.dropout[layer](t_bwd[layer])
                 
         hidden = torch.cat((h_fwd[-1], h_bwd[-1]), dim=1)
         return self.fc(hidden)
@@ -89,6 +89,8 @@ class LSTM(nn.Module):
         self.config = config
         self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
                                       embedding_dim=config.embedding_dim)
+        if config.emb:
+            self.embedding.weight.data.copy_(config.embedding)
         self.lstm = nn.LSTM(
             input_size=config.embedding_dim,
             hidden_size=config.hidden_dim,
@@ -97,8 +99,6 @@ class LSTM(nn.Module):
             bidirectional=True,
             batch_first=True
         )
-        if config.emb:
-            self.embedding.weight.data.copy_(config.embedding)
         self.fc = nn.Sequential(nn.Linear(config.hidden_dim * 2, 64),
                                 nn.Linear(64, config.num_class))
 
@@ -115,6 +115,8 @@ class GRU(nn.Module):
         self.config = config
         self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
                                       embedding_dim=config.embedding_dim)
+        if config.emb:
+            self.embedding.weight.data.copy_(config.embedding)
         self.gru = nn.GRU(
             input_size=config.embedding_dim,
             hidden_size=config.hidden_dim,
@@ -122,9 +124,7 @@ class GRU(nn.Module):
             dropout=config.dropout_rate,
             bidirectional=True,
             batch_first=True
-        )
-        if config.emb:
-            self.embedding.weight.data.copy_(config.embedding)
+        ) 
         self.fc = nn.Sequential(nn.Linear(config.hidden_dim * 2, 64),
                                 nn.Linear(64, config.num_class))
 
@@ -134,3 +134,27 @@ class GRU(nn.Module):
         hidden = hidden.view(self.config.num_layers, -1, x.size(0), self.config.hidden_dim)
         hidden = torch.cat(hidden[-1].unbind(0), dim=-1)
         return self.fc(hidden)
+
+class MLP(nn.Module):
+    def __init__(self, config):
+        super(MLP, self).__init__()
+        self.config = config
+        self.embedding = nn.Embedding(num_embeddings=config.vocab_size,
+                                      embedding_dim=config.embedding_dim)
+        if config.emb:
+            self.embedding.weight.data.copy_(config.embedding)
+        self.flatten = nn.Flatten()
+
+        num_layer = len(config.hidden_sizes)
+        layer_sizes = [config.max_sent_len*config.embedding_dim] + config.hidden_sizes
+        self.mlp = nn.Sequential()
+        for i in range(num_layer):
+            self.mlp.extend([nn.Linear(layer_sizes[i], layer_sizes[i+1]),
+                             nn.ReLU(),
+                             nn.Dropout(config.dropout_rate)])
+        self.mlp.append(nn.Linear(layer_sizes[-1], config.num_class))
+    
+    def forward(self, x):
+        embed_x = self.embedding(x)
+        flatten = self.flatten(embed_x)
+        return self.mlp(flatten)
