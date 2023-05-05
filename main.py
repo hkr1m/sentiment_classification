@@ -1,4 +1,4 @@
-import models, train, loader
+import model, train, loader
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -29,21 +29,21 @@ class Config(object):
 class Parser(argparse.ArgumentParser):
     def __init__(self):
         super(Parser, self).__init__(description="Sentiment Classification")
-        self.add_argument("-m", "--model", choices=["TextCNN", "BiRNN", "LSTM", "GRU", "MLP"], default="TextCNN")
-        self.add_argument("-l", "--model-load-path", dest="model_load_path", default="")
-        self.add_argument("-s", "--model-save-path", dest="model_save_path", default="")
-        self.add_argument("--device", choices=["cuda", "mps", "cpu", "auto"], default="auto")
-        self.add_argument("-b", "--batch-size", dest="batch_size", type=int, default=50)
-        self.add_argument("--lr", dest="learning_rate", type=float, default=1e-3)
-        self.add_argument("-e", "--epochs", type=int, default=10)
-        self.add_argument("-d", "--dropout-rate", dest="dropout_rate", type=float, default=0.3)
-        self.add_argument("--unemb", dest="emb", action="store_false", default=True)
-        self.add_argument("-len", "--max-sent-len", dest="max_sent_len", type=int, default=120)
-        self.add_argument("-f", "--feature-size", dest="feature_size", type=int, default=20)
-        self.add_argument("-w", "--window-sizes", dest="window_sizes", type=int, nargs="*", default=[3, 5, 7])
-        self.add_argument("-n", "--num-layers", dest="num_layers", type=int, default=2)
-        self.add_argument("-hd", "--hidden-dim", dest="hidden_dim", type=int, default=100)
-        self.add_argument("-hs", "--hidden-sizes", dest="hidden_sizes", type=int, nargs="*", default=[512, 512])
+        self.add_argument("-m", "--model", choices=["TextCNN", "BiRNN", "LSTM", "GRU", "MLP"], default="TextCNN", help="指定模型，默认使用 TextCNN")
+        self.add_argument("-l", "--model-load-path", dest="model_load_path", default="", help="指定模型参数加载路径")
+        self.add_argument("-s", "--model-save-path", dest="model_save_path", default="", help="指定模型参数保存路径")
+        self.add_argument("--device", choices=["cuda", "mps", "cpu", "auto"], default="auto", help="指定 PyTorch 使用的设备")
+        self.add_argument("-b", "--batch-size", dest="batch_size", type=int, default=50, help="指定 batch 大小")
+        self.add_argument("--lr", dest="learning_rate", type=float, default=1e-3, help="指定 learning rate")
+        self.add_argument("-e", "--epochs", type=int, default=10, help="指定要运行的 epoch 数")
+        self.add_argument("-d", "--dropout-rate", dest="dropout_rate", type=float, default=0.3, help="指定训练期间使用的 dropout rate")
+        self.add_argument("--unemb", dest="emb", action="store_false", default=True, help="不采用预训练的 embedding")
+        self.add_argument("-len", "--max-sent-len", dest="max_sent_len", type=int, default=120, help="指定最大截取或补全的句子长度")
+        self.add_argument("-f", "--feature-size", dest="feature_size", type=int, default=20, help="指定每个卷积核的特征数，用于 TextCNN")
+        self.add_argument("-w", "--window-sizes", dest="window_sizes", type=int, nargs="*", default=[3, 5, 7], help="指定卷积核大小，用于 TextCNN")
+        self.add_argument("-n", "--num-layers", dest="num_layers", type=int, default=2, help="指定隐含层数，用于 BiRNN")
+        self.add_argument("-hd", "--hidden-dim", dest="hidden_dim", type=int, default=100, help="指定每个隐含层大小，用于 BiRNN")
+        self.add_argument("-hs", "--hidden-sizes", dest="hidden_sizes", type=int, nargs="*", default=[512, 512], help="指定隐含层大小，用于 MLP")
 
 if __name__ == "__main__":
     train_path = "data/train.txt"
@@ -67,15 +67,15 @@ if __name__ == "__main__":
     test_dataloader = DataLoader(testing_data, batch_size=config.batch_size, shuffle=True)
 
     if config.model == "TextCNN":
-        model = models.TextCNN(config).to(config.device)
+        model = model.TextCNN(config).to(config.device)
     elif config.model == "BiRNN":
-        model = models.BiRNN(config).to(config.device)
+        model = model.BiRNN(config).to(config.device)
     elif config.model == "LSTM":
-        model = models.LSTM(config).to(config.device)
+        model = model.LSTM(config).to(config.device)
     elif config.model == "GRU":
-        model = models.GRU(config).to(config.device)
+        model = model.GRU(config).to(config.device)
     elif config.model == "MLP":
-        model = models.MLP(config).to(config.device)
+        model = model.MLP(config).to(config.device)
 
     if len(config.model_load_path):
         print(f"Loading weights from {config.model_load_path}")
