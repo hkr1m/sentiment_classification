@@ -2,6 +2,7 @@ import model, train, loader
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 import argparse
 
 class Config(object):
@@ -63,7 +64,7 @@ if __name__ == "__main__":
     validation_data = loader.SemtimentDataset(validation_path, word2id, config.max_sent_len)
     testing_data = loader.SemtimentDataset(test_path, word2id, config.max_sent_len)
     train_dataloader = DataLoader(training_data, batch_size=config.batch_size, shuffle=True)
-    valid_dataloder = DataLoader(validation_data, batch_size=config.batch_size, shuffle=True)
+    valid_dataloader = DataLoader(validation_data, batch_size=config.batch_size, shuffle=True)
     test_dataloader = DataLoader(testing_data, batch_size=config.batch_size, shuffle=True)
 
     if config.model == "TextCNN":
@@ -87,13 +88,34 @@ if __name__ == "__main__":
 
     print(f"Training with model {config.model}")
 
-    for t in range(config.epochs):
-        print(f"Epoch {t+1}\n-------------------------------")
-        train.train_loop(train_dataloader, model, loss_fn, optimizer, scheduler)
+    writer = SummaryWriter("log")
+
+    for epoch in range(config.epochs):
+        print(f"Epoch {epoch+1}\n-------------------------------")
+        loss = train.train_loop(train_dataloader, model, loss_fn, optimizer, scheduler)
+        writer.add_scalar("train loss", loss, epoch + 1)
         print("Validating...")
-        train.test_loop(valid_dataloder, model, loss_fn)
+        loss, precision, recall, accuracy, F_measure = train.test_loop(valid_dataloader, model, loss_fn)
+        print(f"Valid loss: {loss:>6f}\n\
+  Precision: {precision:>6f}, Recall: {recall:>6f} \n\
+  Accuracy: {accuracy:>6f}, F_measure: {F_measure:>6f}")
+        writer.add_scalar("valid loss", loss, epoch + 1)
+        writer.add_scalar("valid precision", precision, epoch + 1)
+        writer.add_scalar("valid recall", recall, epoch + 1)
+        writer.add_scalar("valid accuracy", accuracy, epoch + 1)
+        writer.add_scalar("valid F1 score", F_measure, epoch + 1)
         print("Testing...")
-        train.test_loop(valid_dataloder, model, loss_fn)
+        loss, precision, recall, accuracy, F_measure = train.test_loop(test_dataloader, model, loss_fn)
+        print(f"Test loss: {loss:>6f}\n\
+  Precision: {precision:>6f}, Recall: {recall:>6f} \n\
+  Accuracy: {accuracy:>6f}, F_measure: {F_measure:>6f}")
+        writer.add_scalar("test loss", loss, epoch + 1)
+        writer.add_scalar("test precision", precision, epoch + 1)
+        writer.add_scalar("test recall", recall, epoch + 1)
+        writer.add_scalar("test accuracy", accuracy, epoch + 1)
+        writer.add_scalar("test F1 score", F_measure, epoch + 1)
+
+    writer.close()
 
     print("Done!")
     if len(config.model_save_path):

@@ -3,6 +3,8 @@ from math import copysign
 
 def train_loop(dataloader, model, loss_fn, optimizer, scheduler):
     model.train()
+    num_batches = len(dataloader)
+    train_loss = 0.
     size = len(dataloader.dataset)
     for batch, (X, y) in enumerate(dataloader):
         X, y = X.to(model.config.device), y.to(model.config.device)
@@ -11,10 +13,12 @@ def train_loop(dataloader, model, loss_fn, optimizer, scheduler):
         loss = loss_fn(pred, y)
         loss.backward()
         optimizer.step()
+        loss = loss.item()
+        train_loss += loss
         if batch % 100 == 0:
-            loss, current = loss.item(), (batch + 1) * len(X)
-            print(f"Loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+            print(f"Loss: {loss:>7f}  [{(batch+1) * len(X):>5d}/{size:>5d}]")
     scheduler.step()
+    return train_loss / num_batches
 
 def _div(numerator, denominator):
     try:
@@ -47,6 +51,4 @@ def test_loop(dataloader, model, loss_fn):
     recall = _div(TP, P)
     accuracy = _div(TP+TN, P+N)
     F_measure = _div(2, _div(1, precision) + _div(1, recall))
-    print(f"Loss: {test_loss:>6f}\n\
-  Precision: {precision:>6f}, Recall: {recall:>6f} \n\
-  Accuracy: {accuracy:>6f}, F_measure: {F_measure:>6f}")
+    return test_loss, precision, recall, accuracy, F_measure
