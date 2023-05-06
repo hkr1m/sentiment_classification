@@ -47,12 +47,12 @@ class Parser(argparse.ArgumentParser):
         self.add_argument("-hs", "--hidden-sizes", dest="hidden_sizes", type=int, nargs="*", default=[512, 512], help="指定隐含层大小，用于 MLP")
 
 if __name__ == "__main__":
-    train_path = "data/train.txt"
-    validation_path = "data/validation.txt"
-    test_path = "data/test.txt"
-    word2id_path = "src/word2id.pkl"
-    embedding_path = "src/embedding.npy"
-    word2vec_path = "src/wiki_word2vec_50.bin"
+    train_path = "./data/train.txt"
+    validation_path = "./data/validation.txt"
+    test_path = "./data/test.txt"
+    word2id_path = "./src/word2id.pkl"
+    embedding_path = "./src/embedding.npy"
+    word2vec_path = "./src/wiki_word2vec_50.bin"
     
     config = Config()
     Parser().parse_args(namespace=config)
@@ -88,7 +88,7 @@ if __name__ == "__main__":
 
     print(f"Training with model {config.model}")
 
-    writer = SummaryWriter("log")
+    writer = SummaryWriter("./log/" + config.model)
 
     for epoch in range(config.epochs):
         print(f"Epoch {epoch+1}\n-------------------------------")
