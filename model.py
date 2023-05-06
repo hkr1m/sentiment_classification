@@ -28,16 +28,18 @@ class TextCNN(nn.Module):
         return self.fc(self.dropout(y))
 
 class _RNNCell(nn.Module):
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, input_size, hidden_size, dropout):
         super(_RNNCell, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.i2h = nn.Linear(input_size, hidden_size)
         self.h2h = nn.Linear(hidden_size, hidden_size)
+        self.dropout = nn.Dropout(dropout)
     
     def forward(self, input, hidden):
-        hidden = self.i2h(input) + self.h2h(hidden)
-        return torch.tanh(hidden)
+        hidden = torch.tanh(self.i2h(input) + self.h2h(hidden))
+        hidden = self.dropout(hidden)
+        return hidden
 
 class BiRNN(nn.Module):
     def __init__(self, config):
@@ -50,16 +52,19 @@ class BiRNN(nn.Module):
         if config.emb:
             self.embedding.weight.data.copy_(config.embedding)
         self.fwd_rnn = nn.ModuleList([_RNNCell(input_size=config.embedding_dim,
-                                                   hidden_size=config.hidden_dim)])
+                                               hidden_size=config.hidden_dim,
+                                               dropout=config.dropout_rate)])
         self.bwd_rnn = nn.ModuleList([_RNNCell(input_size=config.embedding_dim,
-                                                    hidden_size=config.hidden_dim)])
+                                               hidden_size=config.hidden_dim,
+                                               dropout=config.dropout_rate)])
         for _ in range(config.num_layers-1):
             self.fwd_rnn.append(_RNNCell(input_size=config.hidden_dim,
-                                             hidden_size=config.hidden_dim))
+                                         hidden_size=config.hidden_dim,
+                                         dropout=config.dropout_rate))
             self.bwd_rnn.append(_RNNCell(input_size=config.hidden_dim,
-                                              hidden_size=config.hidden_dim))
+                                         hidden_size=config.hidden_dim,
+                                         dropout=config.dropout_rate))
         
-        self.dropout = nn.ModuleList([nn.Dropout(config.dropout_rate) for _ in range(config.num_layers)])
         self.fc = nn.Sequential(nn.Linear(config.hidden_dim * 2, 64),
                                 nn.Linear(64, config.num_class))
 
@@ -69,16 +74,13 @@ class BiRNN(nn.Module):
         h_fwd = [torch.zeros(batch_size, self.hidden_dim).to(x.device) for _ in range(self.num_layers)]
         h_bwd = [torch.zeros(batch_size, self.hidden_dim).to(x.device) for _ in range(self.num_layers)]
         for t in range(seq_len):
-            t_fwd, t_bwd = [], []
             for layer in range(self.num_layers):
                 if layer == 0:
-                    t_fwd.append(self.fwd_rnn[layer](embed_x[t], h_fwd[layer]))
-                    t_bwd.append(self.bwd_rnn[layer](embed_x[-t-1], h_bwd[layer]))
+                    h_fwd[layer] = self.fwd_rnn[layer](embed_x[t], h_fwd[layer])
+                    h_bwd[layer] = self.bwd_rnn[layer](embed_x[seq_len-t-1], h_bwd[layer])
                 else:
-                    t_fwd.append(self.fwd_rnn[layer](t_fwd[layer-1], h_fwd[layer]))
-                    t_bwd.append(self.bwd_rnn[layer](t_bwd[layer-1], h_bwd[layer]))
-                h_fwd[layer] = self.dropout[layer](t_fwd[layer])
-                h_bwd[layer] = self.dropout[layer](t_bwd[layer])
+                    h_fwd[layer] = self.fwd_rnn[layer](h_fwd[layer-1], h_fwd[layer])
+                    h_bwd[layer] = self.bwd_rnn[layer](h_bwd[layer-1], h_bwd[layer])
                 
         hidden = torch.cat((h_fwd[-1], h_bwd[-1]), dim=1)
         return self.fc(hidden)
