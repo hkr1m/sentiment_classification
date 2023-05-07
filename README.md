@@ -16,6 +16,12 @@
 
 ## 运行方式
 
+在当前虚拟环境中安装 Python 依赖库
+
+```bash
+pip install numpy torch scipy gensim tensorboard
+```
+
 在项目路径下，运行
 
 ```bash
