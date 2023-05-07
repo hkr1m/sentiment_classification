@@ -30,6 +30,7 @@ class SemtimentDataset(Dataset):
     def __getitem__(self, idx):
         return self.sents[idx], self.lables[idx]
 
+# 从所有数据集加载词到标号的对应，或者从 word2id_path 直接读取
 def get_word2id(word2id_path, data_paths, rebuild = False):
     print("Loading word2id...")
     word2id = {"_NULL_": 0}
@@ -48,6 +49,7 @@ def get_word2id(word2id_path, data_paths, rebuild = False):
             word2id = pickle.load(file)
     return word2id
 
+# 从 word2vec_path 计算 embedding，或者从 embedding_path 直接读取
 def get_embedding(embedding_path, word2vec_path, word2id, rebuild = False):
     print("Loading embedding...")
     if rebuild or not os.path.exists(embedding_path) or os.path.getsize(embedding_path) == 0:

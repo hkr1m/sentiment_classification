@@ -42,8 +42,8 @@ class Parser(argparse.ArgumentParser):
         self.add_argument("-len", "--max-sent-len", dest="max_sent_len", type=int, default=120, help="指定最大截取或补全的句子长度")
         self.add_argument("-f", "--feature-size", dest="feature_size", type=int, default=50, help="指定每个卷积核的特征数，用于 TextCNN")
         self.add_argument("-w", "--window-sizes", dest="window_sizes", type=int, nargs="*", default=[3, 4, 5], help="指定卷积核大小，用于 TextCNN")
-        self.add_argument("-n", "--num-layers", dest="num_layers", type=int, default=2, help="指定隐含层数，用于 BiRNN")
-        self.add_argument("-hd", "--hidden-dim", dest="hidden_dim", type=int, default=100, help="指定每个隐含层大小，用于 BiRNN")
+        self.add_argument("-n", "--num-layers", dest="num_layers", type=int, default=2, help="指定隐含层数，用于 BiRNN / LSTM / GRU")
+        self.add_argument("-hd", "--hidden-dim", dest="hidden_dim", type=int, default=100, help="指定每个隐含层大小，用于 BiRNN / LSTM / GRU")
         self.add_argument("-hs", "--hidden-sizes", dest="hidden_sizes", type=int, nargs="*", default=[512, 512], help="指定隐含层大小，用于 MLP")
 
 if __name__ == "__main__":
@@ -84,7 +84,7 @@ if __name__ == "__main__":
 
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4)
 
     print(f"Training with model {config.model}")
 
